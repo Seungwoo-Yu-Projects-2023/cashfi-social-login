@@ -1,10 +1,8 @@
-import 'dart:convert';
 import 'dart:developer';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_config/flutter_config.dart';
-import 'package:flutter_naver_login/flutter_naver_login.dart';
-import 'package:http/http.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,39 +37,96 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  WebViewController? controller;
+  String? prevUrl;
+
   void _naverLogin() async {
-    await FlutterNaverLogin.logIn();
-    NaverAccessToken token = await FlutterNaverLogin.currentAccessToken;
-    log(token.toString());
+    if (controller != null) {
+      return;
+    }
 
     String serverURL = await FlutterConfig.get("SERVER_URL");
-    Response res = await post(
-        Uri.parse('$serverURL/auth/login/naver'),
-        headers: {
-          'Content-Type': 'application/json; charset=UTF-8',
-        },
-        body: jsonEncode({
-          'accessToken': token.accessToken,
-        })
-    );
-    log(res.body);
+    Map<String, String> headers = {
+      'x-app-version': '1.1.1',
+      'x-os': 'android'
+    };
+
+    setState(() {
+      controller = WebViewController()
+        ..setBackgroundColor(Colors.white)
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..addJavaScriptChannel(
+            'login_token',
+            onMessageReceived: _continueLogin(serverURL)
+        )
+        ..addJavaScriptChannel(
+            'register_required',
+            onMessageReceived: _goToRegister(serverURL)
+        )
+        ..setNavigationDelegate(NavigationDelegate(
+          onUrlChange: (urlChange) async {
+            log('urlChange.url ${urlChange.url ?? 'null'}');
+            log('prevUrl ${prevUrl ?? 'null'}');
+
+            if (urlChange.url != null) {
+              if (prevUrl == null || prevUrl != urlChange.url) {
+                if (urlChange.url!.contains('$serverURL/auth/login/naver/callback')) {
+                  controller
+                    ?..runJavaScript('window.stop();')
+                    ..loadRequest(
+                      Uri.parse(urlChange.url!),
+                      headers: headers
+                    );
+                }
+
+                prevUrl = urlChange.url;
+              }
+            }
+          }
+        ))
+        ..loadRequest(Uri.parse('$serverURL/auth/login/naver'));
+    });
+  }
+
+  void Function(JavaScriptMessage) _continueLogin(String serverURL) {
+    return (JavaScriptMessage message) {
+      log('_continueLogin ${message.message}');
+
+      setState(() {
+        controller = null;
+      });
+    };
+  }
+
+  void Function(JavaScriptMessage) _goToRegister(String serverURL) {
+    return (JavaScriptMessage message) {
+      log('_goToRegistration ${message.message}');
+
+      setState(() {
+        controller = null;
+      });
+    };
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(widget.title),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            TextButton(onPressed: _naverLogin, child: const Text('Naver login'))
-          ],
+        appBar: AppBar(
+          backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+          title: Text(widget.title),
         ),
-      ),// This trailing comma makes auto-formatting nicer for build methods.
+        body: controller == null
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    TextButton(
+                        onPressed: _naverLogin,
+                        child: const Text('Naver login'))
+                  ],
+                ),
+              )
+            : WebViewWidget(controller: controller!),
     );
   }
 }
